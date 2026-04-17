@@ -649,7 +649,7 @@ int SCH1_setDRY(int8_t polarity, bool enable)
     if ((requestFrame_User_If_Ctrl & DATA_FIELD_MASK) != (responseFrame_User_If_Ctrl & DATA_FIELD_MASK))
         return SCH1_ERR_OTHER;
     
-    return SCH1_OK;
+      return SCH1_OK;
 }
 
 

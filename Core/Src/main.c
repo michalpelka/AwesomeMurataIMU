@@ -21,7 +21,6 @@
 
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
-#include <stdio.h>
 #include "config.h"
 #include "hw.h"
 #include "SCH1.h"
@@ -48,6 +47,7 @@ RTC_HandleTypeDef hrtc;
 SPI_HandleTypeDef hspi1;
 
 UART_HandleTypeDef huart1;
+DMA_HandleTypeDef hdma_usart1_tx;
 
 /* USER CODE BEGIN PV */
 
@@ -56,6 +56,7 @@ UART_HandleTypeDef huart1;
 /* Private function prototypes -----------------------------------------------*/
 void SystemClock_Config(void);
 static void MX_GPIO_Init(void);
+static void MX_DMA_Init(void);
 static void MX_RTC_Init(void);
 static void MX_SPI1_Init(void);
 static void MX_USART1_UART_Init(void);
@@ -65,7 +66,6 @@ static void MX_USART1_UART_Init(void);
 
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
-
 /* USER CODE END 0 */
 
 /**
@@ -97,6 +97,7 @@ int main(void)
 
   /* Initialize all configured peripherals */
   MX_GPIO_Init();
+  MX_DMA_Init();
   MX_RTC_Init();
   MX_SPI1_Init();
   MX_USART1_UART_Init();
@@ -106,66 +107,65 @@ int main(void)
 
   /* Infinite loop */
   /* USER CODE BEGIN WHILE */
-  uint8_t data[128] = "";
-  // uint8_t tx[2];
-  // uint8_t rx[2];
   hw_init();
-  char serial_num[15];
-  int  init_status;
-  SCH1_filter         Filter;
-  SCH1_sensitivity    Sensitivity;
-  SCH1_decimation     Decimation;
 
-  // SCH1600 settings and initialization
-  //------------------------------------
+  SCH1_filter Filter = {
+    .Rate12 = FILTER_RATE,
+    .Acc12  = FILTER_ACC12,
+    .Acc3   = FILTER_ACC3,
+  };
+  SCH1_sensitivity Sensitivity = {
+    .Rate1 = SENSITIVITY_RATE1,
+    .Rate2 = SENSITIVITY_RATE2,
+    .Acc1  = SENSITIVITY_ACC1,
+    .Acc2  = SENSITIVITY_ACC2,
+    .Acc3  = SENSITIVITY_ACC3,
+  };
+  SCH1_decimation Decimation = {
+    .Rate2 = DECIMATION_RATE,
+    .Acc2  = DECIMATION_ACC,
+  };
 
-  // SCH1600 filter settings
-  Filter.Rate12 = FILTER_RATE;
-  Filter.Acc12  = FILTER_ACC12;
-  Filter.Acc3   = FILTER_ACC3;
+  int init_status;
+  do {
+    init_status = SCH1_init(Filter, Sensitivity, Decimation, false);
+  } while (init_status != SCH1_OK);
 
-  // SCH1600 sensitivity settings
-  Sensitivity.Rate1 = SENSITIVITY_RATE1;
-  Sensitivity.Rate2 = SENSITIVITY_RATE2;
-  Sensitivity.Acc1  = SENSITIVITY_ACC1;
-  Sensitivity.Acc2  = SENSITIVITY_ACC2;
-  Sensitivity.Acc3  = SENSITIVITY_ACC3;
+  HAL_UART_Transmit(&huart1, (uint8_t*)"SCH1 OK\r\n", 9, 500);
 
-  // SCH1600 decimation settings (for Rate2 and Acc2 channels).
-  Decimation.Rate2 = DECIMATION_RATE;
-  Decimation.Acc2  = DECIMATION_ACC;
-  uint8_t tx[6] = {0x02, 0xC0, 0x00, 0xFF, 0xFF, 0xD9};
-  uint8_t rx[6] = {0};
+  typedef struct __attribute__((packed)) {
+    uint8_t sync;
+    int32_t rate[3];
+    int32_t acc[3];
+    int32_t temp;
+  } imu_pkt_t;
+
+  static imu_pkt_t pkt[2];
+  uint8_t pkt_idx = 0;
+  SCH1_raw_data SCH1_data;
+
   while (1)
   {
-    // HAL_GPIO_WritePin(SPI_CS_GPIO_Port, SPI_CS_Pin, GPIO_PIN_RESET);
-    // // small CS setup delay
-    // for (volatile int i = 0; i < 20; i++);
-    //
-    // HAL_SPI_TransmitReceive(&hspi1, tx, rx, 6, 100);
-    //
-    // HAL_GPIO_WritePin(SPI_CS_GPIO_Port, SPI_CS_Pin, GPIO_PIN_SET);
-    //
-    // uint16_t val = (rx[4] << 8) | rx[5];
-    //
-    // int len = snprintf(data, 128, "RX: %02X %02X %02X %02X %02X %02X | VAL: %u\r\n",
-    //                    rx[0], rx[1], rx[2], rx[3], rx[4], rx[5], val);
-    //
-    // HAL_UART_Transmit(&huart1, (uint8_t*)data, len, 100);
+    HAL_GPIO_WritePin(DBG_GPIO_Port, DBG_Pin, GPIO_PIN_SET);
+    SCH1_getData(&SCH1_data);
+    HAL_GPIO_WritePin(DBG_GPIO_Port, DBG_Pin, GPIO_PIN_RESET);
 
-    //HAL_Delay(1);
-    uint64_t packed = 0x000002C000FFFFD9ULL;
-    SCH1_sendRequest(packed);
-    HAL_Delay(1);
+    if (!SCH1_data.frame_error) {
+      uint8_t next = pkt_idx ^ 1;
+      pkt[next].sync    = 0xAA;
+      pkt[next].rate[0] = SCH1_data.Rate1_raw[AXIS_X];
+      pkt[next].rate[1] = SCH1_data.Rate1_raw[AXIS_Y];
+      pkt[next].rate[2] = SCH1_data.Rate1_raw[AXIS_Z];
+      pkt[next].acc[0]  = SCH1_data.Acc1_raw[AXIS_X];
+      pkt[next].acc[1]  = SCH1_data.Acc1_raw[AXIS_Y];
+      pkt[next].acc[2]  = SCH1_data.Acc1_raw[AXIS_Z];
+      pkt[next].temp    = SCH1_data.Temp_raw;
 
-    // init_status = SCH1_ERR_OTHER;
-    // while (init_status != SCH1_OK)
-    // {
-    //   init_status = SCH1_init(Filter, Sensitivity, Decimation, false);
-    //   if (init_status != SCH1_OK) {
-    //     HAL_UART_Transmit(&huart1, "SPI failed", 10, 500);
-    //   }
-    // }
+      if (huart1.gState == HAL_UART_STATE_READY) {
+        pkt_idx = next;
+        HAL_UART_Transmit_DMA(&huart1, (uint8_t*)&pkt[pkt_idx], sizeof(imu_pkt_t));
+      }
+    }
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
@@ -302,7 +302,7 @@ static void MX_USART1_UART_Init(void)
 
   /* USER CODE END USART1_Init 1 */
   huart1.Instance = USART1;
-  huart1.Init.BaudRate = 115200;
+  huart1.Init.BaudRate = 460800;
   huart1.Init.WordLength = UART_WORDLENGTH_8B;
   huart1.Init.StopBits = UART_STOPBITS_1;
   huart1.Init.Parity = UART_PARITY_NONE;
@@ -316,6 +316,22 @@ static void MX_USART1_UART_Init(void)
   /* USER CODE BEGIN USART1_Init 2 */
 
   /* USER CODE END USART1_Init 2 */
+
+}
+
+/**
+  * Enable DMA controller clock
+  */
+static void MX_DMA_Init(void)
+{
+
+  /* DMA controller clock enable */
+  __HAL_RCC_DMA1_CLK_ENABLE();
+
+  /* DMA interrupt init */
+  /* DMA1_Channel4_IRQn interrupt configuration */
+  HAL_NVIC_SetPriority(DMA1_Channel4_IRQn, 0, 0);
+  HAL_NVIC_EnableIRQ(DMA1_Channel4_IRQn);
 
 }
 
@@ -340,7 +356,7 @@ static void MX_GPIO_Init(void)
   HAL_GPIO_WritePin(GPIOC, LED1_Pin|led2_Pin, GPIO_PIN_RESET);
 
   /*Configure GPIO pin Output Level */
-  HAL_GPIO_WritePin(SPI_CS_GPIO_Port, SPI_CS_Pin, GPIO_PIN_RESET);
+  HAL_GPIO_WritePin(GPIOB, SPI_CS_Pin|DBG_Pin, GPIO_PIN_RESET);
 
   /*Configure GPIO pins : LED1_Pin led2_Pin */
   GPIO_InitStruct.Pin = LED1_Pin|led2_Pin;
@@ -349,12 +365,12 @@ static void MX_GPIO_Init(void)
   GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
   HAL_GPIO_Init(GPIOC, &GPIO_InitStruct);
 
-  /*Configure GPIO pin : SPI_CS_Pin */
-  GPIO_InitStruct.Pin = SPI_CS_Pin;
+  /*Configure GPIO pins : SPI_CS_Pin DBG_Pin */
+  GPIO_InitStruct.Pin = SPI_CS_Pin|DBG_Pin;
   GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
   GPIO_InitStruct.Pull = GPIO_NOPULL;
   GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
-  HAL_GPIO_Init(SPI_CS_GPIO_Port, &GPIO_InitStruct);
+  HAL_GPIO_Init(GPIOB, &GPIO_InitStruct);
 
   /* USER CODE BEGIN MX_GPIO_Init_2 */
 
