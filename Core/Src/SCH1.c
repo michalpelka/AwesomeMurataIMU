@@ -1117,12 +1117,12 @@ int SCH1_init(SCH1_filter sFilter, SCH1_sensitivity sSensitivity, SCH1_decimatio
  */
 void SCH1_getData(SCH1_raw_data *data)
 {
-    SCH1_sendRequest(REQ_READ_RATE_X1);
-    uint64_t rate_x_raw = SCH1_sendRequest(REQ_READ_RATE_Y1);
-    uint64_t rate_y_raw = SCH1_sendRequest(REQ_READ_RATE_Z1);
-    uint64_t rate_z_raw = SCH1_sendRequest(REQ_READ_ACC_X1);
-    uint64_t acc_x_raw  = SCH1_sendRequest(REQ_READ_ACC_Y1);
-    uint64_t acc_y_raw  = SCH1_sendRequest(REQ_READ_ACC_Z1);
+    SCH1_sendRequest(REQ_READ_RATE_X2);
+    uint64_t rate_x_raw = SCH1_sendRequest(REQ_READ_RATE_Y2);
+    uint64_t rate_y_raw = SCH1_sendRequest(REQ_READ_RATE_Z2);
+    uint64_t rate_z_raw = SCH1_sendRequest(REQ_READ_ACC_X2);
+    uint64_t acc_x_raw  = SCH1_sendRequest(REQ_READ_ACC_Y2);
+    uint64_t acc_y_raw  = SCH1_sendRequest(REQ_READ_ACC_Z2);
     uint64_t acc_z_raw  = SCH1_sendRequest(REQ_READ_TEMP);
     uint64_t temp_raw   = SCH1_sendRequest(REQ_READ_TEMP);
 
@@ -1131,12 +1131,12 @@ void SCH1_getData(SCH1_raw_data *data)
     data->frame_error = SCH1_check_48bit_frame_error(miso_words, (sizeof(miso_words) / sizeof(uint64_t)));
     
     // Parse MISO data to structure
-    data->Rate1_raw[AXIS_X] = SPI48_DATA_INT32(rate_x_raw);
-    data->Rate1_raw[AXIS_Y] = SPI48_DATA_INT32(rate_y_raw);
-    data->Rate1_raw[AXIS_Z] = SPI48_DATA_INT32(rate_z_raw);
-    data->Acc1_raw[AXIS_X]  = SPI48_DATA_INT32(acc_x_raw);
-    data->Acc1_raw[AXIS_Y]  = SPI48_DATA_INT32(acc_y_raw);
-    data->Acc1_raw[AXIS_Z]  = SPI48_DATA_INT32(acc_z_raw);
+    data->Rate2_raw[AXIS_X] = SPI48_DATA_INT32(rate_x_raw);
+    data->Rate2_raw[AXIS_Y] = SPI48_DATA_INT32(rate_y_raw);
+    data->Rate2_raw[AXIS_Z] = SPI48_DATA_INT32(rate_z_raw);
+    data->Acc2_raw[AXIS_X]  = SPI48_DATA_INT32(acc_x_raw);
+    data->Acc2_raw[AXIS_Y]  = SPI48_DATA_INT32(acc_y_raw);
+    data->Acc2_raw[AXIS_Z]  = SPI48_DATA_INT32(acc_z_raw);
 
     // Temperature data is always 16 bits wide. Drop 4 LSBs as they are not used.
     data->Temp_raw = SPI48_DATA_INT32(temp_raw) >> 4;

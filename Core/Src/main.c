@@ -50,7 +50,7 @@ UART_HandleTypeDef huart1;
 DMA_HandleTypeDef hdma_usart1_tx;
 
 /* USER CODE BEGIN PV */
-
+volatile uint8_t dry_flag = 0;
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -128,7 +128,7 @@ int main(void)
 
   int init_status;
   do {
-    init_status = SCH1_init(Filter, Sensitivity, Decimation, false);
+    init_status = SCH1_init(Filter, Sensitivity, Decimation, true);
     if (init_status != SCH1_OK) {
       HAL_UART_Transmit(&huart1, (uint8_t*)"SCH1 NOK\r\n", 10, 500);
     }
@@ -150,16 +150,19 @@ int main(void)
 
   while (1)
   {
+    while (!dry_flag);
+    dry_flag = 0;
+
     SCH1_getData(&SCH1_data);
     if (!SCH1_data.frame_error) {
       uint8_t next = pkt_idx ^ 1;
       pkt[next].sync    = 0xAA;
-      pkt[next].rate[0] = SCH1_data.Rate1_raw[AXIS_X];
-      pkt[next].rate[1] = SCH1_data.Rate1_raw[AXIS_Y];
-      pkt[next].rate[2] = SCH1_data.Rate1_raw[AXIS_Z];
-      pkt[next].acc[0]  = SCH1_data.Acc1_raw[AXIS_X];
-      pkt[next].acc[1]  = SCH1_data.Acc1_raw[AXIS_Y];
-      pkt[next].acc[2]  = SCH1_data.Acc1_raw[AXIS_Z];
+      pkt[next].rate[0] = SCH1_data.Rate2_raw[AXIS_X];
+      pkt[next].rate[1] = SCH1_data.Rate2_raw[AXIS_Y];
+      pkt[next].rate[2] = SCH1_data.Rate2_raw[AXIS_Z];
+      pkt[next].acc[0]  = SCH1_data.Acc2_raw[AXIS_X];
+      pkt[next].acc[1]  = SCH1_data.Acc2_raw[AXIS_Y];
+      pkt[next].acc[2]  = SCH1_data.Acc2_raw[AXIS_Z];
       pkt[next].temp    = SCH1_data.Temp_raw;
 
       if (huart1.gState == HAL_UART_STATE_READY) {
@@ -191,7 +194,9 @@ void SystemClock_Config(void)
   RCC_OscInitStruct.HSIState = RCC_HSI_ON;
   RCC_OscInitStruct.HSICalibrationValue = RCC_HSICALIBRATION_DEFAULT;
   RCC_OscInitStruct.LSIState = RCC_LSI_ON;
-  RCC_OscInitStruct.PLL.PLLState = RCC_PLL_NONE;
+  RCC_OscInitStruct.PLL.PLLState = RCC_PLL_ON;
+  RCC_OscInitStruct.PLL.PLLSource = RCC_PLLSOURCE_HSI_DIV2;
+  RCC_OscInitStruct.PLL.PLLMUL = RCC_PLL_MUL16;
   if (HAL_RCC_OscConfig(&RCC_OscInitStruct) != HAL_OK)
   {
     Error_Handler();
@@ -201,12 +206,12 @@ void SystemClock_Config(void)
   */
   RCC_ClkInitStruct.ClockType = RCC_CLOCKTYPE_HCLK|RCC_CLOCKTYPE_SYSCLK
                               |RCC_CLOCKTYPE_PCLK1|RCC_CLOCKTYPE_PCLK2;
-  RCC_ClkInitStruct.SYSCLKSource = RCC_SYSCLKSOURCE_HSI;
+  RCC_ClkInitStruct.SYSCLKSource = RCC_SYSCLKSOURCE_PLLCLK;
   RCC_ClkInitStruct.AHBCLKDivider = RCC_SYSCLK_DIV1;
-  RCC_ClkInitStruct.APB1CLKDivider = RCC_HCLK_DIV1;
+  RCC_ClkInitStruct.APB1CLKDivider = RCC_HCLK_DIV2;
   RCC_ClkInitStruct.APB2CLKDivider = RCC_HCLK_DIV1;
 
-  if (HAL_RCC_ClockConfig(&RCC_ClkInitStruct, FLASH_LATENCY_0) != HAL_OK)
+  if (HAL_RCC_ClockConfig(&RCC_ClkInitStruct, FLASH_LATENCY_2) != HAL_OK)
   {
     Error_Handler();
   }
@@ -272,7 +277,7 @@ static void MX_SPI1_Init(void)
   hspi1.Init.CLKPolarity = SPI_POLARITY_LOW;
   hspi1.Init.CLKPhase = SPI_PHASE_1EDGE;
   hspi1.Init.NSS = SPI_NSS_SOFT;
-  hspi1.Init.BaudRatePrescaler = SPI_BAUDRATEPRESCALER_2;
+  hspi1.Init.BaudRatePrescaler = SPI_BAUDRATEPRESCALER_8;
   hspi1.Init.FirstBit = SPI_FIRSTBIT_MSB;
   hspi1.Init.TIMode = SPI_TIMODE_DISABLE;
   hspi1.Init.CRCCalculation = SPI_CRCCALCULATION_DISABLE;
@@ -399,7 +404,11 @@ static void MX_GPIO_Init(void)
 }
 
 /* USER CODE BEGIN 4 */
-
+void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin)
+{
+  if (GPIO_Pin == DRY_Pin)
+    dry_flag = 1;
+}
 /* USER CODE END 4 */
 
 /**

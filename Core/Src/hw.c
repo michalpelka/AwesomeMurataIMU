@@ -57,11 +57,6 @@ static void TIM_Init(void);
   */
 void hw_init() {
 
-    // GPIO_init();    // IO-pin initializations
-    // UART_Init();    // UART channel for PC connection (IO-redirection)
-    // SPI_Init();     // SPI channel for SCH1600
-    // TIM_Init();     // SCH1600 sampling timer initialization (TIM2)
-    //
     // Wait for power supply to stabilize
     HAL_Delay(100);
 }
