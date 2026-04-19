@@ -44,13 +44,13 @@
 
 // IO-pin definitions
 #define EXTRESN_PORT    GPIOA
-#define EXTRESN_PIN     GPIO_PIN_8
+#define EXTRESN_PIN     GPIO_PIN_4
 #define TA9_PORT        GPIOB
 #define TA9_PIN         GPIO_PIN_10
 #define TA8_PORT        GPIOC
 #define TA8_PIN         GPIO_PIN_7
 #define DRY_SYNC_PORT   GPIOA
-#define DRY_SYNC_PIN    GPIO_PIN_9
+#define DRY_SYNC_PIN    GPIO_PIN_3
 
 #define SPI1_CS_PORT    GPIOB
 #define SPI1_CS_PIN     GPIO_PIN_0

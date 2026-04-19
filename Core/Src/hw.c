@@ -254,7 +254,7 @@ void TIM_Init(void)
   */
 void hw_EXTRESN_High(void)
 {
-    //HAL_GPIO_WritePin(EXTRESN_PORT, EXTRESN_PIN, GPIO_PIN_SET);
+    HAL_GPIO_WritePin(EXTRESN_PORT, EXTRESN_PIN, GPIO_PIN_SET);
 }
 
 
@@ -267,7 +267,7 @@ void hw_EXTRESN_High(void)
   */
 void hw_EXTRESN_Low(void)
 {
-   // HAL_GPIO_WritePin(EXTRESN_PORT, EXTRESN_PIN, GPIO_PIN_RESET);
+   HAL_GPIO_WritePin(EXTRESN_PORT, EXTRESN_PIN, GPIO_PIN_RESET);
 }
 
 

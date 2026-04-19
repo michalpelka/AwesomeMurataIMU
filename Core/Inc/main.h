@@ -61,6 +61,11 @@ void Error_Handler(void);
 #define LED1_GPIO_Port GPIOC
 #define led2_Pin GPIO_PIN_14
 #define led2_GPIO_Port GPIOC
+#define DRY_Pin GPIO_PIN_3
+#define DRY_GPIO_Port GPIOA
+#define DRY_EXTI_IRQn EXTI3_IRQn
+#define EXTERNSN_Pin GPIO_PIN_4
+#define EXTERNSN_GPIO_Port GPIOA
 #define SPI_CS_Pin GPIO_PIN_0
 #define SPI_CS_GPIO_Port GPIOB
 #define DBG_Pin GPIO_PIN_3
