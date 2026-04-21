@@ -46,6 +46,7 @@ target_link_directories(${CMAKE_PROJECT_NAME} PRIVATE
 target_sources(${CMAKE_PROJECT_NAME} PRIVATE
     Core/Src/hw.c
     Core/Src/SCH1.c
+    Core/Src/minmea.c
 )
 
 # Add include paths

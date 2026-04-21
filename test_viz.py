@@ -21,7 +21,9 @@ import matplotlib.animation as animation
 
 # ── Packet definition ──────────────────────────────────────────────────────────
 SYNC_BYTE    = 0xAA
-PKT_FMT      = '<B3i3ii'   # uint8 sync + 3×rate + 3×acc + temp
+PKT_FMT      = '<BQ3i3ii'  # uint8 sync + uint64 timestamp_us + 3×rate + 3×acc + temp
+
+import datetime
 PKT_SIZE     = struct.calcsize(PKT_FMT)  # 29 bytes
 
 # ── Sensitivity (must match config.h) ─────────────────────────────────────────
@@ -45,6 +47,7 @@ class IMUReader(threading.Thread):
         self.temp = collections.deque([0.0]*n, maxlen=n)
         self.pkt_count = 0
         self.err_count = 0
+        self.timestamp_us = 0
 
     def run(self):
         buf = b''
@@ -71,7 +74,7 @@ class IMUReader(threading.Thread):
                     self.err_count += 1
                     continue
 
-                sync, rx, ry, rz, ax, ay, az, temp_raw = fields
+                sync, timestamp_us, rx, ry, rz, ax, ay, az, temp_raw = fields
                 if sync != SYNC_BYTE:
                     self.err_count += 1
                     continue
@@ -90,6 +93,7 @@ class IMUReader(threading.Thread):
                         self.rate[i].append(rate_dps[i])
                         self.acc[i].append(acc_ms2[i])
                     self.temp.append(temp_c)
+                    self.timestamp_us = timestamp_us
                     self.pkt_count += 1
 
 
@@ -98,6 +102,7 @@ def main():
     parser = argparse.ArgumentParser(description='SCH16T IMU Visualizer')
     parser.add_argument('--port', default=None, help='Serial port (e.g. /dev/ttyUSB0 or COM3)')
     parser.add_argument('--baud', type=int, default=460800)
+    parser.add_argument('--console', action='store_true', help='Print data to console instead of plotting')
     args = parser.parse_args()
 
     # auto-detect port
@@ -112,6 +117,31 @@ def main():
     print(f"Connecting to {args.port} @ {args.baud} baud  (packet size {PKT_SIZE} bytes)")
     reader = IMUReader(args.port, args.baud)
     reader.start()
+
+    if args.console:
+        last_count = 0
+        while True:
+            time.sleep(0.1)
+            with reader.lock:
+                cnt = reader.pkt_count
+                if cnt == last_count:
+                    continue
+                last_count = cnt
+                ts  = reader.timestamp_us
+                rx  = reader.rate[0][-1]
+                ry  = reader.rate[1][-1]
+                rz  = reader.rate[2][-1]
+                ax  = reader.acc[0][-1]
+                ay  = reader.acc[1][-1]
+                az  = reader.acc[2][-1]
+                tmp = reader.temp[-1]
+            dt = datetime.datetime.utcfromtimestamp(ts / 1e6) if ts else datetime.datetime.utcfromtimestamp(0)
+            print(f"[{dt.strftime('%Y-%m-%d %H:%M:%S.%f')[:-3]}]  "
+                  f"rate: {rx:+8.3f} {ry:+8.3f} {rz:+8.3f} °/s  "
+                  f"acc: {ax:+7.3f} {ay:+7.3f} {az:+7.3f} m/s²  "
+                  f"temp: {tmp:+6.2f} °C  "
+                  f"pkts: {cnt}")
+        return
 
     # ── Figure layout ──────────────────────────────────────────────────────────
     fig, axes = plt.subplots(3, 1, figsize=(12, 8))

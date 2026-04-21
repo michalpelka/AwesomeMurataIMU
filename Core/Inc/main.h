@@ -59,8 +59,10 @@ void Error_Handler(void);
 /* Private defines -----------------------------------------------------------*/
 #define LED1_Pin GPIO_PIN_13
 #define LED1_GPIO_Port GPIOC
-#define led2_Pin GPIO_PIN_14
-#define led2_GPIO_Port GPIOC
+#define LED2_Pin GPIO_PIN_14
+#define LED2_GPIO_Port GPIOC
+#define DBG_Pin GPIO_PIN_2
+#define DBG_GPIO_Port GPIOA
 #define DRY_Pin GPIO_PIN_3
 #define DRY_GPIO_Port GPIOA
 #define DRY_EXTI_IRQn EXTI3_IRQn
@@ -68,8 +70,10 @@ void Error_Handler(void);
 #define EXTERNSN_GPIO_Port GPIOA
 #define SPI_CS_Pin GPIO_PIN_0
 #define SPI_CS_GPIO_Port GPIOB
-#define DBG_Pin GPIO_PIN_3
-#define DBG_GPIO_Port GPIOB
+#define NMEA_IN_Pin GPIO_PIN_11
+#define NMEA_IN_GPIO_Port GPIOB
+#define PPS_IN_Pin GPIO_PIN_6
+#define PPS_IN_GPIO_Port GPIOB
 
 /* USER CODE BEGIN Private defines */
 
