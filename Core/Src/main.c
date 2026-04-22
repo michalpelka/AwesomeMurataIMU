@@ -56,7 +56,8 @@ DMA_HandleTypeDef hdma_usart1_tx;
 
 /* USER CODE BEGIN PV */
 volatile uint8_t  dry_flag = 0;
-volatile uint32_t tim2_hi = 0;
+volatile uint32_t cyccnt_hi = 0;
+volatile uint32_t cyccnt_prev = 0;
 volatile uint64_t pps_posix_us = 0;
 volatile uint64_t pps_local_us = 0;
 volatile uint64_t pending_posix_us = 0;
@@ -86,10 +87,10 @@ static inline uint64_t get_local_us(void)
 {
     uint32_t hi, cnt;
     do {
-        hi  = tim2_hi;
-        cnt = TIM2->CNT;
-    } while (hi != tim2_hi);
-    return ((uint64_t)hi << 16) | cnt;
+        hi  = cyccnt_hi;
+        cnt = DWT->CYCCNT;
+    } while (hi != cyccnt_hi);
+    return (((uint64_t)hi << 32) | cnt) / 64;
 }
 /* USER CODE END 0 */
 
@@ -131,7 +132,9 @@ int main(void)
   /* USER CODE BEGIN 2 */
   HAL_NVIC_SetPriority(EXTI9_5_IRQn, 0, 0);
   HAL_NVIC_EnableIRQ(EXTI9_5_IRQn);
-  HAL_TIM_Base_Start_IT(&htim2);
+  CoreDebug->DEMCR |= CoreDebug_DEMCR_TRCENA_Msk;
+  DWT->CYCCNT = 0;
+  DWT->CTRL  |= DWT_CTRL_CYCCNTENA_Msk;
   HAL_UART_Receive_IT(&huart3, &nmea_rx_byte, 1);
   /* USER CODE END 2 */
 
@@ -524,13 +527,6 @@ static void MX_GPIO_Init(void)
 }
 
 /* USER CODE BEGIN 4 */
-void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
-{
-  if (htim->Instance == TIM2)
-    HAL_GPIO_TogglePin(DBG_GPIO_Port, DBG_Pin);
-    tim2_hi++;
-}
-
 void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin)
 {
   if (GPIO_Pin == DRY_Pin) {

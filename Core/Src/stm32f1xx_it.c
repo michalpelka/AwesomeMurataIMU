@@ -51,7 +51,8 @@
 
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
-
+extern volatile uint32_t cyccnt_hi;
+extern volatile uint32_t cyccnt_prev;
 /* USER CODE END 0 */
 
 /* External variables --------------------------------------------------------*/
@@ -190,7 +191,10 @@ void SysTick_Handler(void)
   /* USER CODE END SysTick_IRQn 0 */
   HAL_IncTick();
   /* USER CODE BEGIN SysTick_IRQn 1 */
-
+  uint32_t now = DWT->CYCCNT;
+  if (now < cyccnt_prev)
+    cyccnt_hi++;
+  cyccnt_prev = now;
   /* USER CODE END SysTick_IRQn 1 */
 }
 
