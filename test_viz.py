@@ -21,10 +21,19 @@ import matplotlib.animation as animation
 
 # ── Packet definition ──────────────────────────────────────────────────────────
 SYNC_BYTE    = 0xAA
-PKT_FMT      = '<BQ3i3ii'  # uint8 sync + uint64 timestamp_us + 3×rate + 3×acc + temp
+PKT_FMT      = '<BQ3i3iiB'  # uint8 sync + uint64 timestamp_us + 3×rate + 3×acc + temp + uint8 crc
 
 import datetime
-PKT_SIZE     = struct.calcsize(PKT_FMT)  # 29 bytes
+PKT_SIZE     = struct.calcsize(PKT_FMT)
+
+def crc8(data):
+    crc = 0
+    for b in data:
+        crc ^= b
+        for _ in range(8):
+            crc = (crc << 1) ^ 0x07 if crc & 0x80 else crc << 1
+        crc &= 0xFF
+    return crc
 
 # ── Sensitivity (must match config.h) ─────────────────────────────────────────
 SENSITIVITY_RATE = 1600.0   # LSB / dps  (20-bit mode)
@@ -74,8 +83,8 @@ class IMUReader(threading.Thread):
                     self.err_count += 1
                     continue
 
-                sync, timestamp_us, rx, ry, rz, ax, ay, az, temp_raw = fields
-                if sync != SYNC_BYTE:
+                sync, timestamp_us, rx, ry, rz, ax, ay, az, temp_raw, pkt_crc = fields
+                if sync != SYNC_BYTE or crc8(raw[:-1]) != pkt_crc:
                     self.err_count += 1
                     continue
 

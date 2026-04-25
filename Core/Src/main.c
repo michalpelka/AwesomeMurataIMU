@@ -83,6 +83,17 @@ static void MX_USART3_UART_Init(void);
 
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
+static uint8_t crc8(const uint8_t *data, size_t len)
+{
+    uint8_t crc = 0;
+    for (size_t i = 0; i < len; i++) {
+        crc ^= data[i];
+        for (int j = 0; j < 8; j++)
+            crc = (crc & 0x80) ? (crc << 1) ^ 0x07 : (crc << 1);
+    }
+    return crc;
+}
+
 static inline uint64_t get_local_us(void)
 {
     uint32_t hi, cnt;
@@ -176,6 +187,7 @@ int main(void)
     int32_t  rate[3];
     int32_t  acc[3];
     int32_t  temp;
+    uint8_t  crc;
   } imu_pkt_t;
 
   static imu_pkt_t pkt[2];
@@ -203,6 +215,8 @@ int main(void)
       if (t++ % 100 == 0) {
         HAL_GPIO_TogglePin(LED2_GPIO_Port, LED2_Pin);
       }
+
+      pkt[next].crc = crc8((uint8_t*)&pkt[next], offsetof(imu_pkt_t, crc));
 
       if (huart1.gState == HAL_UART_STATE_READY) {
         pkt_idx = next;
@@ -350,7 +364,7 @@ static void MX_TIM2_Init(void)
 
   /* USER CODE END TIM2_Init 1 */
   htim2.Instance = TIM2;
-  htim2.Init.Prescaler = 63;
+  htim2.Init.Prescaler = 64;
   htim2.Init.CounterMode = TIM_COUNTERMODE_UP;
   htim2.Init.Period = 65535;
   htim2.Init.ClockDivision = TIM_CLOCKDIVISION_DIV1;
@@ -537,6 +551,12 @@ void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin)
   }
   if (GPIO_Pin == PPS_IN_Pin) {
     pps_local_us  = get_local_us();
+    // const volatile uint64_t now_us = pps_posix_us + (get_local_us() - pps_local_us);
+    // char data[32];
+    // int size = snprintf(data, sizeof(data), "%lu.%06lu\r\n",
+    //                     (unsigned long)(now_us / 1000000ULL),
+    //                     (unsigned long)(now_us % 1000000ULL));
+    // HAL_UART_Transmit(&huart1, (uint8_t*)data, size, 500);
     pps_posix_us  = pending_posix_us + 1000000ULL;
   }
 }

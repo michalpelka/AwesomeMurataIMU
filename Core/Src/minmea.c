@@ -487,17 +487,6 @@ bool minmea_parse_gsv(struct minmea_sentence_gsv *frame, const char *sentence)
     return true;
 }
 
-static time_t timegm(struct tm *tm)
-{
-    static const int days_before_month[] = {0,31,59,90,120,151,181,212,243,273,304,334};
-    int y = tm->tm_year + 1900;
-    int m = tm->tm_mon;
-    int leap_days = (y-1969)/4 - (y-1901)/100 + (y-1601)/400;
-    if (m > 1 && ((y%4==0 && y%100!=0) || y%400==0)) leap_days++;
-    time_t days = (time_t)(y-1970)*365 + leap_days + days_before_month[m] + tm->tm_mday - 1;
-    return days*86400 + tm->tm_hour*3600 + tm->tm_min*60 + tm->tm_sec;
-}
-
 int minmea_gettimeofday(struct timeval *tv, const struct minmea_date *date, const struct minmea_time *time)
 {
     if (date->year == -1 || time->hours == -1)
