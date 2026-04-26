@@ -53,6 +53,8 @@
 /* USER CODE BEGIN 0 */
 extern volatile uint32_t cyccnt_hi;
 extern volatile uint32_t cyccnt_prev;
+extern volatile uint32_t pps_holdoff_count_ms;
+extern volatile uint32_t pps_nmea_age_ms;
 /* USER CODE END 0 */
 
 /* External variables --------------------------------------------------------*/
@@ -61,7 +63,13 @@ extern DMA_HandleTypeDef hdma_usart1_tx;
 extern UART_HandleTypeDef huart1;
 extern UART_HandleTypeDef huart3;
 /* USER CODE BEGIN EV */
-
+/**
+  * @brief This function handles EXTI line[9:5] interrupts.
+  */
+void EXTI9_5_IRQHandler(void)
+{
+  HAL_GPIO_EXTI_IRQHandler(PPS_IN_Pin);
+}
 /* USER CODE END EV */
 
 /******************************************************************************/
@@ -195,6 +203,8 @@ void SysTick_Handler(void)
   if (now < cyccnt_prev)
     cyccnt_hi++;
   cyccnt_prev = now;
+  pps_holdoff_count_ms++;
+  pps_nmea_age_ms++;
   /* USER CODE END SysTick_IRQn 1 */
 }
 
@@ -205,13 +215,7 @@ void SysTick_Handler(void)
 /* please refer to the startup file (startup_stm32f1xx.s).                    */
 /******************************************************************************/
 
-/**
-  * @brief This function handles EXTI line[9:5] interrupts.
-  */
-void EXTI9_5_IRQHandler(void)
-{
-  HAL_GPIO_EXTI_IRQHandler(PPS_IN_Pin);
-}
+
 
 /**
   * @brief This function handles EXTI line3 interrupt.

@@ -62,7 +62,8 @@ volatile uint64_t pps_posix_us = 0;
 volatile uint64_t pps_local_us = 0;
 volatile uint64_t pending_posix_us = 0;
 volatile uint64_t dry_timestamp_us = 0;
-
+volatile uint32_t pps_holdoff_count_ms = 0;
+volatile uint32_t pps_nmea_age_ms = 0;
 static uint8_t nmea_rx_byte = 0;
 static char    nmea_buf[100];
 static uint8_t nmea_len = 0;
@@ -528,7 +529,7 @@ static void MX_GPIO_Init(void)
   /*Configure GPIO pin : PPS_IN_Pin */
   GPIO_InitStruct.Pin = PPS_IN_Pin;
   GPIO_InitStruct.Mode = GPIO_MODE_IT_RISING;
-  GPIO_InitStruct.Pull = GPIO_NOPULL;
+  GPIO_InitStruct.Pull = GPIO_PULLDOWN;
   HAL_GPIO_Init(PPS_IN_GPIO_Port, &GPIO_InitStruct);
 
   /* EXTI interrupt init*/
@@ -548,8 +549,13 @@ void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin)
 
     dry_timestamp_us = pps_posix_us + (get_local_us() - pps_local_us);
     dry_flag = 1;
+    return;
   }
-  if (GPIO_Pin == PPS_IN_Pin) {
+  // accept pps only:
+  //  - if PPS_IN_Pin is high
+  //  - there is more than 900 ms from last pps
+  //  - nmea message is not older than 1000 ms
+  if (GPIO_Pin == PPS_IN_Pin && pps_holdoff_count_ms > 900 && pps_nmea_age_ms < 999) {
     pps_local_us  = get_local_us();
     // const volatile uint64_t now_us = pps_posix_us + (get_local_us() - pps_local_us);
     // char data[32];
@@ -558,6 +564,8 @@ void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin)
     //                     (unsigned long)(now_us % 1000000ULL));
     // HAL_UART_Transmit(&huart1, (uint8_t*)data, size, 500);
     pps_posix_us  = pending_posix_us + 1000000ULL;
+    pps_holdoff_count_ms = 0;
+
   }
 }
 
@@ -575,6 +583,7 @@ void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart)
         if (minmea_parse_rmc(&rmc, nmea_buf) && rmc.valid) {
           struct timeval tv;
           if (minmea_gettimeofday(&tv, &rmc.date, &rmc.time) == 0)
+            pps_nmea_age_ms = 0;
             pending_posix_us = (uint64_t)tv.tv_sec * 1000000ULL + tv.tv_usec;
         }
       }
