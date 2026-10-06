@@ -10,5 +10,5 @@
 #define SENSITIVITY_ACC1    3200.0f     // LSB / m/s2, DYN1 Nominal Sensitivity for 20 bit data.
 #define SENSITIVITY_ACC2    3200.0f
 #define SENSITIVITY_ACC3    3200.0f     // LSB / m/s2, DYN1 Nominal Sensitivity for 20 bit data.
-#define DECIMATION_RATE     32          // DEC5, Output sample rate decimation.
-#define DECIMATION_ACC      32
+#define DECIMATION_RATE     16          // Output rate = ~23.77 kHz / decimation: 32 -> 743 Hz, 16 -> 1486 Hz (see README.md)
+#define DECIMATION_ACC      16

@@ -328,9 +328,21 @@ uint64_t hw_SPI48_Send_Request(uint64_t Request)
         txBuffer[size - index - 1] = (Request >> (index << 4)) & 0xFFFF;
     }
 
-    // Send tx buffer and receive rx buffer simultaneously.
+    // Send tx buffer and receive rx buffer simultaneously. Registers are driven
+    // directly: HAL_SPI_TransmitReceive spent ~10 us of overhead per 48-bit frame.
+    SPI_TypeDef *spi = hspi1.Instance;
+    if ((spi->CR1 & SPI_CR1_SPE) == 0)
+        __HAL_SPI_ENABLE(&hspi1);
+
     hw_CS_Low();
-    HAL_SPI_TransmitReceive(&hspi1, (uint8_t*)txBuffer, (uint8_t*)rxBuffer, size, 10);
+    for (index = 0; index < size; index++)
+    {
+        while ((spi->SR & SPI_SR_TXE) == 0) {}
+        spi->DR = txBuffer[index];
+        while ((spi->SR & SPI_SR_RXNE) == 0) {}
+        rxBuffer[index] = (uint16_t)spi->DR;
+    }
+    while (spi->SR & SPI_SR_BSY) {}
     hw_CS_High();
 
     // Create ReceivedData qword from received rx buffer (MISO data).
