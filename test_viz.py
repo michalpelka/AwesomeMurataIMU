@@ -1,11 +1,14 @@
 #!/usr/bin/env python3
 """
 SCH16T IMU Visualizer
-Packet format (29 bytes, packed, little-endian):
+Packet format (39 bytes, packed, little-endian):
   uint8_t  sync   = 0xAA
+  uint64_t timestamp_us
   int32_t  rate[3]          (X, Y, Z)
   int32_t  acc[3]           (X, Y, Z)
   int32_t  temp
+  uint8_t  gps_status       (GPS_* flags below)
+  uint8_t  crc
 """
 
 import struct
@@ -21,7 +24,21 @@ import matplotlib.animation as animation
 
 # ── Packet definition ──────────────────────────────────────────────────────────
 SYNC_BYTE    = 0xAA
-PKT_FMT      = '<BQ3i3iiB'  # uint8 sync + uint64 timestamp_us + 3×rate + 3×acc + temp + uint8 crc
+PKT_FMT      = '<BQ3i3iiBB'  # uint8 sync + uint64 timestamp_us + 3×rate + 3×acc + temp + uint8 gps_status + uint8 crc
+
+# gps_status bits (must match main.c)
+GPS_TIME_VALID = 0x01  # locked to PPS at least once: timestamps are Unix time
+GPS_PPS_OK     = 0x02  # last PPS < 1.1 s ago; otherwise holding over
+GPS_NMEA_OK    = 0x04  # valid RMC time < 1 s ago
+GPS_RATE_CAL   = 0x08  # CPU clock rate measured against PPS
+
+
+def gps_status_text(status):
+    if not status & GPS_TIME_VALID:
+        return 'GPS: no lock (time since boot)'
+    state = 'locked' if status & GPS_PPS_OK else 'HOLDOVER (no PPS)'
+    flags = [name for bit, name in ((GPS_NMEA_OK, 'NMEA'), (GPS_RATE_CAL, 'rate cal')) if status & bit]
+    return f"GPS: {state}  [{', '.join(flags) or '-'}]"
 
 import datetime
 PKT_SIZE     = struct.calcsize(PKT_FMT)
@@ -57,6 +74,7 @@ class IMUReader(threading.Thread):
         self.pkt_count = 0
         self.err_count = 0
         self.timestamp_us = 0
+        self.gps_status = 0
 
     def run(self):
         buf = b''
@@ -83,7 +101,7 @@ class IMUReader(threading.Thread):
                     self.err_count += 1
                     continue
 
-                sync, timestamp_us, rx, ry, rz, ax, ay, az, temp_raw, pkt_crc = fields
+                sync, timestamp_us, rx, ry, rz, ax, ay, az, temp_raw, gps_status, pkt_crc = fields
                 if sync != SYNC_BYTE or crc8(raw[:-1]) != pkt_crc:
                     self.err_count += 1
                     continue
@@ -103,6 +121,7 @@ class IMUReader(threading.Thread):
                         self.acc[i].append(acc_ms2[i])
                     self.temp.append(temp_c)
                     self.timestamp_us = timestamp_us
+                    self.gps_status = gps_status
                     self.pkt_count += 1
 
 
@@ -144,12 +163,14 @@ def main():
                 ay  = reader.acc[1][-1]
                 az  = reader.acc[2][-1]
                 tmp = reader.temp[-1]
+                gps = reader.gps_status
             dt = datetime.datetime.utcfromtimestamp(ts / 1e6) if ts else datetime.datetime.utcfromtimestamp(0)
             print(f"[{dt.strftime('%Y-%m-%d %H:%M:%S.%f')[:-3]}]  "
                   f"rate: {rx:+8.3f} {ry:+8.3f} {rz:+8.3f} °/s  "
                   f"acc: {ax:+7.3f} {ay:+7.3f} {az:+7.3f} m/s²  "
                   f"temp: {tmp:+6.2f} °C  "
-                  f"pkts: {cnt}")
+                  f"pkts: {cnt}  "
+                  f"{gps_status_text(gps)}")
         return
 
     # ── Figure layout ──────────────────────────────────────────────────────────
@@ -187,6 +208,7 @@ def main():
             acc_snap  = [list(reader.acc[i])  for i in range(3)]
             temp_snap = list(reader.temp)
             cnt = reader.pkt_count
+            gps = reader.gps_status
 
         x = range(len(temp_snap))
 
@@ -209,7 +231,7 @@ def main():
             pad = max(abs(mx - mn) * 0.1, 0.5)
             ax_temp.set_ylim(mn - pad, mx + pad)
 
-        title_text.set_text(f'packets received: {cnt}')
+        title_text.set_text(f'packets received: {cnt}    {gps_status_text(gps)}')
         return lines_rate + lines_acc + [line_temp, title_text]
 
     ani = animation.FuncAnimation(fig, update, interval=50, blit=False)

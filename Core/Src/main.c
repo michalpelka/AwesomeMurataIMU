@@ -65,6 +65,14 @@ volatile uint64_t pps_cycles = 0;          // local cycle count at the last acce
 volatile uint32_t pps_cycles_per_sec = 0;  // measured CPU clock, set to nominal in main
 volatile uint64_t pending_posix_us = 0;
 volatile uint64_t dry_timestamp_us = 0;
+volatile uint8_t  dry_gps_status = 0;
+
+// GPS sync status, sent with every sample (see README.md)
+#define GPS_TIME_VALID  0x01  // locked to PPS at least once: timestamps are Unix time
+#define GPS_PPS_OK      0x02  // last PPS accepted < 1.1 s ago; otherwise holding over
+#define GPS_NMEA_OK     0x04  // valid RMC time received < 1 s ago
+#define GPS_RATE_CAL    0x08  // CPU clock rate measured against PPS at least once
+volatile uint8_t  gps_flags = 0;  // GPS_TIME_VALID and GPS_RATE_CAL, set by the PPS handler
 volatile uint32_t pps_holdoff_count_ms = 0;
 volatile uint32_t pps_nmea_age_ms = 0;
 static uint8_t nmea_rx_byte = 0;
@@ -242,13 +250,14 @@ int main(void)
     int32_t  rate[3];
     int32_t  acc[3];
     int32_t  temp;
+    uint8_t  gps_status;  // GPS_* flags
     uint8_t  crc;
   } imu_pkt_t;
 
   static imu_pkt_t pkt[2];
   // USB batches packets: one CDC transfer per packet caps out around 1500 packets/s,
   // so packets collect in one buffer while the other is being sent.
-  enum { USB_BATCH_PKTS = 26 };   // 26 * 38 B = 988 B per transfer
+  enum { USB_BATCH_PKTS = 26 };   // 26 * 39 B = 1014 B per transfer
   static imu_pkt_t usb_buf[2][USB_BATCH_PKTS];
   uint8_t  usb_fill = 0;
   uint16_t usb_count = 0;
@@ -264,6 +273,7 @@ int main(void)
     __disable_irq();
     dry_flag = 0;
     uint64_t timestamp_us = dry_timestamp_us;
+    uint8_t  gps_status   = dry_gps_status;
     __enable_irq();
 
     SCH1_getData(&SCH1_data);
@@ -271,6 +281,7 @@ int main(void)
       uint8_t next = pkt_idx ^ 1;
       pkt[next].sync         = 0xAA;
       pkt[next].timestamp_us = timestamp_us;
+      pkt[next].gps_status   = gps_status;
       pkt[next].rate[0] = SCH1_data.Rate2_raw[AXIS_X];
       pkt[next].rate[1] = SCH1_data.Rate2_raw[AXIS_Y];
       pkt[next].rate[2] = SCH1_data.Rate2_raw[AXIS_Z];
@@ -626,6 +637,12 @@ void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin)
 
 
     dry_timestamp_us = local_to_posix_us(get_local_cycles());
+    uint8_t status = gps_flags;
+    if ((status & GPS_TIME_VALID) && pps_holdoff_count_ms < 1100)
+      status |= GPS_PPS_OK;
+    if (pps_nmea_age_ms < 1000)
+      status |= GPS_NMEA_OK;
+    dry_gps_status = status;
     dry_flag = 1;
     return;
   }
@@ -649,11 +666,13 @@ void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin)
       if (measured > nominal - limit && measured < nominal + limit) {
         int32_t error = (int32_t)((uint32_t)measured - pps_cycles_per_sec);
         pps_cycles_per_sec += error / 8;
+        gps_flags |= GPS_RATE_CAL;
       }
     }
     pps_cycles   = cycles;
     pps_posix_us = posix_us;
     pps_holdoff_count_ms = 0;
+    gps_flags |= GPS_TIME_VALID;
 
   }
 }
