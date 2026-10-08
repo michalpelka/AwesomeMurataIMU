@@ -61,7 +61,8 @@ volatile uint8_t  dry_flag = 0;
 volatile uint32_t cyccnt_hi = 0;
 volatile uint32_t cyccnt_prev = 0;
 volatile uint64_t pps_posix_us = 0;
-volatile uint64_t pps_local_us = 0;
+volatile uint64_t pps_cycles = 0;          // local cycle count at the last accepted PPS
+volatile uint32_t pps_cycles_per_sec = 0;  // measured CPU clock, set to nominal in main
 volatile uint64_t pending_posix_us = 0;
 volatile uint64_t dry_timestamp_us = 0;
 volatile uint32_t pps_holdoff_count_ms = 0;
@@ -124,9 +125,16 @@ uint64_t get_local_cycles(void)
     return cycles;
 }
 
-static inline uint64_t get_local_us(void)
+// Converts local cycles since the last PPS to GPS time, using the CPU clock
+// rate measured between PPS pulses instead of the nominal 72 MHz. Split into
+// whole seconds and remainder so it cannot overflow however long PPS is lost.
+static uint64_t local_to_posix_us(uint64_t cycles)
 {
-    return get_local_cycles() / (SystemCoreClock / 1000000U);
+    uint64_t elapsed = cycles - pps_cycles;
+    uint32_t cps     = pps_cycles_per_sec;
+    uint64_t secs    = elapsed / cps;
+    uint64_t rem     = elapsed % cps;
+    return pps_posix_us + secs * 1000000ULL + rem * 1000000ULL / cps;
 }
 /* USER CODE END 0 */
 
@@ -154,6 +162,9 @@ int main(void)
   SystemClock_Config();
 
   /* USER CODE BEGIN SysInit */
+  // Before any EXTI is enabled: the DRY handler divides by this.
+  pps_cycles_per_sec = SystemCoreClock;
+
   // The board has a fixed D+ pull-up, so hold D+ low briefly to make the host
   // re-enumerate after a reset or flash without replugging the cable.
   __HAL_RCC_GPIOA_CLK_ENABLE();
@@ -614,7 +625,7 @@ void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin)
   if (GPIO_Pin == DRY_Pin) {
 
 
-    dry_timestamp_us = pps_posix_us + (get_local_us() - pps_local_us);
+    dry_timestamp_us = local_to_posix_us(get_local_cycles());
     dry_flag = 1;
     return;
   }
@@ -623,14 +634,25 @@ void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin)
   //  - there is more than 900 ms from last pps
   //  - nmea message is not older than 1000 ms
   if (GPIO_Pin == PPS_IN_Pin && pps_holdoff_count_ms > 900 && pps_nmea_age_ms < 999) {
-    pps_local_us  = get_local_us();
-    // const volatile uint64_t now_us = pps_posix_us + (get_local_us() - pps_local_us);
-    // char data[32];
-    // int size = snprintf(data, sizeof(data), "%lu.%06lu\r\n",
-    //                     (unsigned long)(now_us / 1000000ULL),
-    //                     (unsigned long)(now_us % 1000000ULL));
-    // HAL_UART_Transmit(&huart1, (uint8_t*)data, size, 500);
-    pps_posix_us  = pending_posix_us + 1000000ULL;
+    uint64_t cycles = get_local_cycles();
+    // The newest RMC is from the second before this pulse, but at NMEA rates
+    // above 1 Hz it can be stamped .2/.4/.6/.8, so round down before adding 1 s.
+    uint64_t posix_us = (pending_posix_us / 1000000ULL + 1ULL) * 1000000ULL;
+
+    // Measure the CPU clock against GPS when the previous pulse was exactly 1 s
+    // earlier. Reject anything over 200 ppm off nominal (missed or false pulse)
+    // and smooth by 1/8 to average out PPS and interrupt latency jitter.
+    if (posix_us - pps_posix_us == 1000000ULL) {
+      uint64_t measured = cycles - pps_cycles;
+      uint32_t nominal  = SystemCoreClock;
+      uint32_t limit    = nominal / 5000U;
+      if (measured > nominal - limit && measured < nominal + limit) {
+        int32_t error = (int32_t)((uint32_t)measured - pps_cycles_per_sec);
+        pps_cycles_per_sec += error / 8;
+      }
+    }
+    pps_cycles   = cycles;
+    pps_posix_us = posix_us;
     pps_holdoff_count_ms = 0;
 
   }
@@ -649,9 +671,14 @@ void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart)
         struct minmea_sentence_rmc rmc;
         if (minmea_parse_rmc(&rmc, nmea_buf) && rmc.valid) {
           struct timeval tv;
-          if (minmea_gettimeofday(&tv, &rmc.date, &rmc.time) == 0)
-            pps_nmea_age_ms = 0;
+          if (minmea_gettimeofday(&tv, &rmc.date, &rmc.time) == 0) {
+            // PPS preempts this handler, so update both together or it could
+            // see a fresh age with a stale or half-written 64-bit time.
+            __disable_irq();
             pending_posix_us = (uint64_t)tv.tv_sec * 1000000ULL + tv.tv_usec;
+            pps_nmea_age_ms  = 0;
+            __enable_irq();
+          }
         }
       }
     }
