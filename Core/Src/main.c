@@ -18,6 +18,7 @@
 /* USER CODE END Header */
 /* Includes ------------------------------------------------------------------*/
 #include "main.h"
+#include "usb_device.h"
 
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
@@ -25,6 +26,7 @@
 #include "hw.h"
 #include "SCH1.h"
 #include "minmea.h"
+#include "usbd_cdc_if.h"
 #include <string.h>
 /* USER CODE END Includes */
 
@@ -59,9 +61,18 @@ volatile uint8_t  dry_flag = 0;
 volatile uint32_t cyccnt_hi = 0;
 volatile uint32_t cyccnt_prev = 0;
 volatile uint64_t pps_posix_us = 0;
-volatile uint64_t pps_local_us = 0;
+volatile uint64_t pps_cycles = 0;          // local cycle count at the last accepted PPS
+volatile uint32_t pps_cycles_per_sec = 0;  // measured CPU clock, set to nominal in main
 volatile uint64_t pending_posix_us = 0;
 volatile uint64_t dry_timestamp_us = 0;
+volatile uint8_t  dry_gps_status = 0;
+
+// GPS sync status, sent with every sample (see README.md)
+#define GPS_TIME_VALID  0x01  // locked to PPS at least once: timestamps are Unix time
+#define GPS_PPS_OK      0x02  // last PPS accepted < 1.1 s ago; otherwise holding over
+#define GPS_NMEA_OK     0x04  // valid RMC time received < 1 s ago
+#define GPS_RATE_CAL    0x08  // CPU clock rate measured against PPS at least once
+volatile uint8_t  gps_flags = 0;  // GPS_TIME_VALID and GPS_RATE_CAL, set by the PPS handler
 volatile uint32_t pps_holdoff_count_ms = 0;
 volatile uint32_t pps_nmea_age_ms = 0;
 static uint8_t nmea_rx_byte = 0;
@@ -84,25 +95,54 @@ static void MX_USART3_UART_Init(void);
 
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
+// CRC-8, polynomial 0x07, init 0. Table-driven: the bitwise version took ~60 us per packet.
+static uint8_t crc8_table[256];
+
+static void crc8_init(void)
+{
+    for (int i = 0; i < 256; i++) {
+        uint8_t crc = (uint8_t)i;
+        for (int j = 0; j < 8; j++)
+            crc = (crc & 0x80) ? (crc << 1) ^ 0x07 : (crc << 1);
+        crc8_table[i] = crc;
+    }
+}
+
 static uint8_t crc8(const uint8_t *data, size_t len)
 {
     uint8_t crc = 0;
-    for (size_t i = 0; i < len; i++) {
-        crc ^= data[i];
-        for (int j = 0; j < 8; j++)
-            crc = (crc & 0x80) ? (crc << 1) ^ 0x07 : (crc << 1);
-    }
+    for (size_t i = 0; i < len; i++)
+        crc = crc8_table[crc ^ data[i]];
     return crc;
 }
 
-static inline uint64_t get_local_us(void)
+// Extends the 32-bit DWT cycle counter to 64 bits. Every caller checks for the
+// wrap itself, so a DRY/PPS interrupt that preempts SysTick right after the
+// counter wraps still gets the right high word. Must be called at least once
+// per wrap period (~59 s at 72 MHz); SysTick does that.
+uint64_t get_local_cycles(void)
 {
-    uint32_t hi, cnt;
-    do {
-        hi  = cyccnt_hi;
-        cnt = DWT->CYCCNT;
-    } while (hi != cyccnt_hi);
-    return (((uint64_t)hi << 32) | cnt) / 64;
+    uint32_t primask = __get_PRIMASK();
+    __disable_irq();
+    uint32_t cnt = DWT->CYCCNT;
+    if (cnt < cyccnt_prev)
+        cyccnt_hi++;
+    cyccnt_prev = cnt;
+    uint64_t cycles = ((uint64_t)cyccnt_hi << 32) | cnt;
+    __set_PRIMASK(primask);
+    return cycles;
+}
+
+// Converts local cycles since the last PPS to GPS time, using the CPU clock
+// rate measured between PPS pulses instead of the nominal 72 MHz. Split into
+// whole seconds and remainder so it cannot overflow however long PPS is lost.
+static uint64_t local_to_posix_us(uint64_t cycles)
+{
+    uint64_t elapsed = cycles - pps_cycles;
+    uint32_t cps     = pps_cycles_per_sec;
+    uint64_t secs    = elapsed / cps;
+    uint64_t rem     = elapsed % cps;
+    return pps_posix_us + secs * 1000000ULL + rem * 1000000ULL / cps;
 }
 /* USER CODE END 0 */
 
@@ -130,6 +170,21 @@ int main(void)
   SystemClock_Config();
 
   /* USER CODE BEGIN SysInit */
+  // Before any EXTI is enabled: the DRY handler divides by this.
+  pps_cycles_per_sec = SystemCoreClock;
+
+  // The board has a fixed D+ pull-up, so hold D+ low briefly to make the host
+  // re-enumerate after a reset or flash without replugging the cable.
+  __HAL_RCC_GPIOA_CLK_ENABLE();
+  GPIO_InitTypeDef usb_dp = {
+    .Pin   = GPIO_PIN_12,
+    .Mode  = GPIO_MODE_OUTPUT_PP,
+    .Speed = GPIO_SPEED_FREQ_LOW,
+  };
+  HAL_GPIO_WritePin(GPIOA, GPIO_PIN_12, GPIO_PIN_RESET);
+  HAL_GPIO_Init(GPIOA, &usb_dp);
+  HAL_Delay(10);
+  HAL_GPIO_DeInit(GPIOA, GPIO_PIN_12);
 
   /* USER CODE END SysInit */
 
@@ -141,11 +196,18 @@ int main(void)
   MX_USART1_UART_Init();
   MX_TIM2_Init();
   MX_USART3_UART_Init();
+  MX_USB_DEVICE_Init();
   /* USER CODE BEGIN 2 */
   HAL_NVIC_SetPriority(EXTI9_5_IRQn, 0, 0);
   HAL_NVIC_EnableIRQ(EXTI9_5_IRQn);
   CoreDebug->DEMCR |= CoreDebug_DEMCR_TRCENA_Msk;
+  // CYCCNT survives a system reset and SysTick has already sampled it, so reset
+  // the extension state together with it or the next read looks like a wrap.
+  __disable_irq();
   DWT->CYCCNT = 0;
+  cyccnt_prev = 0;
+  cyccnt_hi   = 0;
+  __enable_irq();
   DWT->CTRL  |= DWT_CTRL_CYCCNTENA_Msk;
   HAL_UART_Receive_IT(&huart3, &nmea_rx_byte, 1);
   /* USER CODE END 2 */
@@ -188,23 +250,38 @@ int main(void)
     int32_t  rate[3];
     int32_t  acc[3];
     int32_t  temp;
+    uint8_t  gps_status;  // GPS_* flags
     uint8_t  crc;
   } imu_pkt_t;
 
   static imu_pkt_t pkt[2];
+  // USB batches packets: one CDC transfer per packet caps out around 1500 packets/s,
+  // so packets collect in one buffer while the other is being sent.
+  enum { USB_BATCH_PKTS = 26 };   // 26 * 39 B = 1014 B per transfer
+  static imu_pkt_t usb_buf[2][USB_BATCH_PKTS];
+  uint8_t  usb_fill = 0;
+  uint16_t usb_count = 0;
   uint8_t pkt_idx = 0;
   SCH1_raw_data SCH1_data;
+  crc8_init();
 
   while (1)
   {
     while (!dry_flag);
+    // Take the timestamp together with the flag: the next DRY can arrive while
+    // the SPI read below is running and would overwrite dry_timestamp_us.
+    __disable_irq();
     dry_flag = 0;
+    uint64_t timestamp_us = dry_timestamp_us;
+    uint8_t  gps_status   = dry_gps_status;
+    __enable_irq();
 
     SCH1_getData(&SCH1_data);
     if (!SCH1_data.frame_error) {
       uint8_t next = pkt_idx ^ 1;
       pkt[next].sync         = 0xAA;
-      pkt[next].timestamp_us = dry_timestamp_us;
+      pkt[next].timestamp_us = timestamp_us;
+      pkt[next].gps_status   = gps_status;
       pkt[next].rate[0] = SCH1_data.Rate2_raw[AXIS_X];
       pkt[next].rate[1] = SCH1_data.Rate2_raw[AXIS_Y];
       pkt[next].rate[2] = SCH1_data.Rate2_raw[AXIS_Z];
@@ -222,6 +299,15 @@ int main(void)
       if (huart1.gState == HAL_UART_STATE_READY) {
         pkt_idx = next;
         HAL_UART_Transmit_DMA(&huart1, (uint8_t*)&pkt[pkt_idx], sizeof(imu_pkt_t));
+      }
+
+      // A full batch means the host is not reading; drop rather than block the sensor loop
+      if (usb_count < USB_BATCH_PKTS)
+        usb_buf[usb_fill][usb_count++] = pkt[next];
+      if (usb_count > 0 && CDC_IsTxReady_FS()) {
+        CDC_Transmit_FS((uint8_t*)usb_buf[usb_fill], usb_count * sizeof(imu_pkt_t));
+        usb_fill ^= 1;
+        usb_count = 0;
       }
     }
     /* USER CODE END WHILE */
@@ -244,13 +330,14 @@ void SystemClock_Config(void)
   /** Initializes the RCC Oscillators according to the specified parameters
   * in the RCC_OscInitTypeDef structure.
   */
-  RCC_OscInitStruct.OscillatorType = RCC_OSCILLATORTYPE_HSI|RCC_OSCILLATORTYPE_LSI;
+  RCC_OscInitStruct.OscillatorType = RCC_OSCILLATORTYPE_LSI|RCC_OSCILLATORTYPE_HSE;
+  RCC_OscInitStruct.HSEState = RCC_HSE_ON;
+  RCC_OscInitStruct.HSEPredivValue = RCC_HSE_PREDIV_DIV1;
   RCC_OscInitStruct.HSIState = RCC_HSI_ON;
-  RCC_OscInitStruct.HSICalibrationValue = RCC_HSICALIBRATION_DEFAULT;
   RCC_OscInitStruct.LSIState = RCC_LSI_ON;
   RCC_OscInitStruct.PLL.PLLState = RCC_PLL_ON;
-  RCC_OscInitStruct.PLL.PLLSource = RCC_PLLSOURCE_HSI_DIV2;
-  RCC_OscInitStruct.PLL.PLLMUL = RCC_PLL_MUL16;
+  RCC_OscInitStruct.PLL.PLLSource = RCC_PLLSOURCE_HSE;
+  RCC_OscInitStruct.PLL.PLLMUL = RCC_PLL_MUL9;
   if (HAL_RCC_OscConfig(&RCC_OscInitStruct) != HAL_OK)
   {
     Error_Handler();
@@ -269,8 +356,9 @@ void SystemClock_Config(void)
   {
     Error_Handler();
   }
-  PeriphClkInit.PeriphClockSelection = RCC_PERIPHCLK_RTC;
+  PeriphClkInit.PeriphClockSelection = RCC_PERIPHCLK_RTC|RCC_PERIPHCLK_USB;
   PeriphClkInit.RTCClockSelection = RCC_RTCCLKSOURCE_LSI;
+  PeriphClkInit.UsbClockSelection = RCC_USBCLKSOURCE_PLL_DIV1_5;
   if (HAL_RCCEx_PeriphCLKConfig(&PeriphClkInit) != HAL_OK)
   {
     Error_Handler();
@@ -487,6 +575,7 @@ static void MX_GPIO_Init(void)
 
   /* GPIO Ports Clock Enable */
   __HAL_RCC_GPIOC_CLK_ENABLE();
+  __HAL_RCC_GPIOD_CLK_ENABLE();
   __HAL_RCC_GPIOA_CLK_ENABLE();
   __HAL_RCC_GPIOB_CLK_ENABLE();
 
@@ -547,7 +636,13 @@ void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin)
   if (GPIO_Pin == DRY_Pin) {
 
 
-    dry_timestamp_us = pps_posix_us + (get_local_us() - pps_local_us);
+    dry_timestamp_us = local_to_posix_us(get_local_cycles());
+    uint8_t status = gps_flags;
+    if ((status & GPS_TIME_VALID) && pps_holdoff_count_ms < 1100)
+      status |= GPS_PPS_OK;
+    if (pps_nmea_age_ms < 1000)
+      status |= GPS_NMEA_OK;
+    dry_gps_status = status;
     dry_flag = 1;
     return;
   }
@@ -556,15 +651,28 @@ void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin)
   //  - there is more than 900 ms from last pps
   //  - nmea message is not older than 1000 ms
   if (GPIO_Pin == PPS_IN_Pin && pps_holdoff_count_ms > 900 && pps_nmea_age_ms < 999) {
-    pps_local_us  = get_local_us();
-    // const volatile uint64_t now_us = pps_posix_us + (get_local_us() - pps_local_us);
-    // char data[32];
-    // int size = snprintf(data, sizeof(data), "%lu.%06lu\r\n",
-    //                     (unsigned long)(now_us / 1000000ULL),
-    //                     (unsigned long)(now_us % 1000000ULL));
-    // HAL_UART_Transmit(&huart1, (uint8_t*)data, size, 500);
-    pps_posix_us  = pending_posix_us + 1000000ULL;
+    uint64_t cycles = get_local_cycles();
+    // The newest RMC is from the second before this pulse, but at NMEA rates
+    // above 1 Hz it can be stamped .2/.4/.6/.8, so round down before adding 1 s.
+    uint64_t posix_us = (pending_posix_us / 1000000ULL + 1ULL) * 1000000ULL;
+
+    // Measure the CPU clock against GPS when the previous pulse was exactly 1 s
+    // earlier. Reject anything over 200 ppm off nominal (missed or false pulse)
+    // and smooth by 1/8 to average out PPS and interrupt latency jitter.
+    if (posix_us - pps_posix_us == 1000000ULL) {
+      uint64_t measured = cycles - pps_cycles;
+      uint32_t nominal  = SystemCoreClock;
+      uint32_t limit    = nominal / 5000U;
+      if (measured > nominal - limit && measured < nominal + limit) {
+        int32_t error = (int32_t)((uint32_t)measured - pps_cycles_per_sec);
+        pps_cycles_per_sec += error / 8;
+        gps_flags |= GPS_RATE_CAL;
+      }
+    }
+    pps_cycles   = cycles;
+    pps_posix_us = posix_us;
     pps_holdoff_count_ms = 0;
+    gps_flags |= GPS_TIME_VALID;
 
   }
 }
@@ -582,9 +690,14 @@ void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart)
         struct minmea_sentence_rmc rmc;
         if (minmea_parse_rmc(&rmc, nmea_buf) && rmc.valid) {
           struct timeval tv;
-          if (minmea_gettimeofday(&tv, &rmc.date, &rmc.time) == 0)
-            pps_nmea_age_ms = 0;
+          if (minmea_gettimeofday(&tv, &rmc.date, &rmc.time) == 0) {
+            // PPS preempts this handler, so update both together or it could
+            // see a fresh age with a stale or half-written 64-bit time.
+            __disable_irq();
             pending_posix_us = (uint64_t)tv.tv_sec * 1000000ULL + tv.tv_usec;
+            pps_nmea_age_ms  = 0;
+            __enable_irq();
+          }
         }
       }
     }
