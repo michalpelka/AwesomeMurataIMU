@@ -74,6 +74,8 @@ void Error_Handler(void);
 #define NMEA_IN_GPIO_Port GPIOB
 #define PPS_IN_Pin GPIO_PIN_6
 #define PPS_IN_GPIO_Port GPIOB
+#define BUZZER_Pin GPIO_PIN_9
+#define BUZZER_GPIO_Port GPIOB
 
 /* USER CODE BEGIN Private defines */
 

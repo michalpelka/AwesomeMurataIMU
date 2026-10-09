@@ -75,6 +75,10 @@ volatile uint8_t  dry_gps_status = 0;
 volatile uint8_t  gps_flags = 0;  // GPS_TIME_VALID and GPS_RATE_CAL, set by the PPS handler
 volatile uint32_t pps_holdoff_count_ms = 0;
 volatile uint32_t pps_nmea_age_ms = 0;
+// Active buzzer from PB9 to GND: high = on. Beeps for
+// BUZZER_BEEP_MS at each PPS pulse; SysTick counts down and turns it off.
+#define BUZZER_BEEP_MS  100
+volatile uint32_t buzzer_on_ms = 0;
 static uint8_t nmea_rx_byte = 0;
 static char    nmea_buf[100];
 static uint8_t nmea_len = 0;
@@ -586,7 +590,7 @@ static void MX_GPIO_Init(void)
   HAL_GPIO_WritePin(GPIOA, DBG_Pin|EXTERNSN_Pin, GPIO_PIN_RESET);
 
   /*Configure GPIO pin Output Level */
-  HAL_GPIO_WritePin(SPI_CS_GPIO_Port, SPI_CS_Pin, GPIO_PIN_RESET);
+  HAL_GPIO_WritePin(GPIOB, SPI_CS_Pin|BUZZER_Pin, GPIO_PIN_RESET);
 
   /*Configure GPIO pins : LED1_Pin LED2_Pin */
   GPIO_InitStruct.Pin = LED1_Pin|LED2_Pin;
@@ -608,12 +612,12 @@ static void MX_GPIO_Init(void)
   GPIO_InitStruct.Pull = GPIO_NOPULL;
   HAL_GPIO_Init(DRY_GPIO_Port, &GPIO_InitStruct);
 
-  /*Configure GPIO pin : SPI_CS_Pin */
-  GPIO_InitStruct.Pin = SPI_CS_Pin;
+  /*Configure GPIO pins : SPI_CS_Pin BUZZER_Pin */
+  GPIO_InitStruct.Pin = SPI_CS_Pin|BUZZER_Pin;
   GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
   GPIO_InitStruct.Pull = GPIO_NOPULL;
   GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
-  HAL_GPIO_Init(SPI_CS_GPIO_Port, &GPIO_InitStruct);
+  HAL_GPIO_Init(GPIOB, &GPIO_InitStruct);
 
   /*Configure GPIO pin : PPS_IN_Pin */
   GPIO_InitStruct.Pin = PPS_IN_Pin;
@@ -674,6 +678,11 @@ void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin)
     pps_holdoff_count_ms = 0;
     gps_flags |= GPS_TIME_VALID;
 
+  }
+  // Beep on every pulse, after the timestamp is taken so it doesn't delay it
+  if (GPIO_Pin == PPS_IN_Pin) {
+    HAL_GPIO_WritePin(BUZZER_GPIO_Port, BUZZER_Pin, GPIO_PIN_SET);  // on
+    buzzer_on_ms = BUZZER_BEEP_MS;
   }
 }
 

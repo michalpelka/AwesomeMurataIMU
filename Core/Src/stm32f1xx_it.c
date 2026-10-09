@@ -54,6 +54,7 @@
 uint64_t get_local_cycles(void);
 extern volatile uint32_t pps_holdoff_count_ms;
 extern volatile uint32_t pps_nmea_age_ms;
+extern volatile uint32_t buzzer_on_ms;
 /* USER CODE END 0 */
 
 /* External variables --------------------------------------------------------*/
@@ -202,6 +203,8 @@ void SysTick_Handler(void)
   get_local_cycles();
   pps_holdoff_count_ms++;
   pps_nmea_age_ms++;
+  if (buzzer_on_ms != 0 && --buzzer_on_ms == 0)
+    HAL_GPIO_WritePin(BUZZER_GPIO_Port, BUZZER_Pin, GPIO_PIN_RESET);  // off
   /* USER CODE END SysTick_IRQn 1 */
 }
 
